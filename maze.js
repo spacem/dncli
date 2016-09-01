@@ -37,9 +37,15 @@ var filter = function(node) {
     return false
 }
 
+var console = { 
+    log: print,
+    warn: print,
+    error: print
+};
+
 
 //======================================
-// DNT compiling
+console.log('DNT compiling');
 //======================================
 var LEVEL_CAP
 var JSON_OUTPUT_DIR
@@ -53,6 +59,9 @@ var items = []
 var weapons = []
 var accumulate = function(entries, cols, file) {
     var name = file.getName()
+	
+	console.log('processing: ', name);
+	
     if (name.startsWith("skilltable")) {
         skills = skills.concat(entries)
     } else if (name.startsWith("skilltreetable")) {
@@ -62,6 +71,7 @@ var accumulate = function(entries, cols, file) {
     } else if (name.startsWith("jobtable")) {
         jobs = jobs.concat(entries)
     } else if (name.startsWith("playerleveltable")) {
+		console.log('*** got player levels ***');
         playerLevels = playerLevels.concat(entries)
     } else if (name.startsWith("itemtable")) {
         items = items.concat(entries)
@@ -71,6 +81,9 @@ var accumulate = function(entries, cols, file) {
 }
 
 var compile = function() {
+	
+	console.log('starting compile');
+	
     LEVEL_CAP = parseInt(JSystem.getenv("DN_LEVEL_CAP"))
     JSON_OUTPUT_DIR = JSystem.getenv("DN_OUT_DIR")
     UISTRING_PATH = JSystem.getenv("DN_UISTRING_PATH")
@@ -78,6 +91,8 @@ var compile = function() {
     // the backend db
     var db = {Jobs: {}, Lookup: {}, SP: [], Weapons: {}}
     var lookup = new JHashSet()
+	
+	console.log('get techs');
 
     var techs = {};
     items.forEach(function(item) {
@@ -85,12 +100,15 @@ var compile = function() {
             techs[item.SkillID] = item.ExchangeType;
         }
     });
+	
+	console.log('filter jobs');
 
     jobs.filter(function(job) job.Service).forEach(function(job) {
         // fix a few things
         job.MaxSPJob1 = Number(job.MaxSPJob1.toFixed(3))
         job.EnglishName = job.EnglishName.toLowerCase()
 
+		console.log('set up job ', job.PrimaryID);
         //================================================
         // SETUP JOB WITH PRIMARY ID
         //================================================
@@ -114,6 +132,7 @@ var compile = function() {
             db.SP = [job.MaxSPJob0, job.MaxSPJob1, job.MaxSPJob2]
         }
 
+		console.log('set up skill tree ');
         //================================================
         // SETUP SKILLTREE
         //================================================
@@ -122,7 +141,15 @@ var compile = function() {
         jobSkillTree = skillTree.filter(function(t) jobSkillsID.indexOf(t.SkillTableID) > -1)
         jobSkillTreeIDs = jobSkillTree.map(function(t) t.SkillTableID)
         jobSkillTree.filter(function(t) jobSkillsID.indexOf(t.SkillTableID) > -1).forEach(function(t) {
-            db.Jobs[job.PrimaryID].SkillTree[t.TreeSlotIndex] = t.SkillTableID
+            if(t.AwakenForceLevel) {
+              if(!db.Jobs[job.PrimaryID].AwakenSkillTree) {
+                db.Jobs[job.PrimaryID].AwakenSkillTree = [];
+              }
+              db.Jobs[job.PrimaryID].AwakenSkillTree[t.TreeSlotIndex] = t.SkillTableID;
+            }
+            else {
+              db.Jobs[job.PrimaryID].SkillTree[t.TreeSlotIndex] = t.SkillTableID
+            }
 
             // setup initial Skills with job sp req
             db.Jobs[job.PrimaryID].Skills[t.SkillTableID] = {}
@@ -159,7 +186,25 @@ var compile = function() {
 
         db.Jobs[job.PrimaryID].SkillTree = newSkillTree
 
+        
+        // ensure sizes are always 24 - for awaken
+        if (db.Jobs[job.PrimaryID].AwakenSkillTree) {
+          if (db.Jobs[job.PrimaryID].AwakenSkillTree.length < 24) {
+              for (var i = db.Jobs[job.PrimaryID].AwakenSkillTree.length; i < 24; i++) {
+                  db.Jobs[job.PrimaryID].AwakenSkillTree.push(null)
+              }
+          }
+  
+          newSkillTree = []
+          st = db.Jobs[job.PrimaryID].AwakenSkillTree
+          for (var i = 0; i < 24; i += 4) {
+              newSkillTree.push([st[i], st[i+1], st[i+2], st[i+3]])
+          }
+  
+          db.Jobs[job.PrimaryID].AwakenSkillTree = newSkillTree;
+        }
 
+		console.log('set up skill levels');
         //================================================
         // SETUP SKILLEVELS
         //================================================
@@ -269,12 +314,14 @@ var compile = function() {
         })
     })
 
+	console.log('set up plater levels');
     //================================================
     // SETUP PLAYER LEVELS (SP GAIN PER LEVEL)
     //================================================
     db.Levels = playerLevels.filter(function(p) p.PrimaryID <= LEVEL_CAP).map(function(p) p.SkillPoint)
-
-
+	// db.Levels = playerLevels.filter(function(p) true).map(function(p) p.SkillPoint)
+	
+	console.log('set up wep types');
     //================================================
     // SETUP THE WEAPON TYPE TO NAME ID MAPPING
     //================================================
@@ -292,14 +339,17 @@ var compile = function() {
             lookup.add(int(db.Weapons[weapon.EquipType]))
         })
 
+	console.log('set up lookuo');
     //================================================
     // SETUP THE LOOKUP TABLE
     //================================================
     var uistringFile = new JFile(UISTRING_PATH)
     var document = JDocumentBuilderFactory.newInstance().newDocumentBuilder().parse(uistringFile)
+	console.log('parsed uistring');
     document.getDocumentElement().normalize()
     var nodes = document.getElementsByTagName("message")
     var nodesLength = nodes.getLength()
+	console.log('building lookup');
     for (var i = 0; i < nodesLength; i++) {
         var e = nodes.item(i)
         var mid = int(e.getAttribute("mid"))
@@ -309,6 +359,7 @@ var compile = function() {
     }
 
 
+	console.log('translate');
     //================================================
     // TRANSLATE JOB NAME ID TO ACTUAL NAME
     //================================================
@@ -324,7 +375,7 @@ var compile = function() {
         db.Weapons[weapType] = db.Lookup[db.Weapons[weapType]]
     }
 
-
+	console.log('cluient data');
     //================================================
     // SETUP ALL NECESSARY DATA FOR CLIENT SIDE
     //================================================
@@ -354,6 +405,7 @@ var compile = function() {
         }
     }
 
+	console.log('delete');
     //================================================
     // DELETE UNNECESSARY DATA FROM DB
     //================================================
@@ -362,6 +414,7 @@ var compile = function() {
         delete db.Jobs[jobID].LookupSet
     }
 
+	console.log('write');
     write("db", db)
 }
 
